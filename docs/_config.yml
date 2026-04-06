@@ -1,5 +1,23 @@
 title: Project Helldiver
 description: AI agent team for onboarding projects onto Sauron observability instances
-theme: cayman
 url: "https://7ports.github.io"
 baseurl: "/project-helldiver"
+
+remote_theme: pages-themes/cayman@v0.2.0
+plugins:
+  - jekyll-remote-theme
+  - jekyll-seo-tag
+
+author:
+  name: Rajesh Pujara
+  github: 7ports
+
+github:
+  repository_url: https://github.com/7ports/project-helldiver
+
+show_downloads: false
+
+header_pages:
+  - index.md
+  - agents.md
+  - onboarding-guide.md
