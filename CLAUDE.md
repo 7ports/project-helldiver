@@ -9,7 +9,7 @@
 **Project Name:** Project Helldiver
 **Type:** AI Observability Onboarding Agent Team
 **Language / Framework:** YAML, Shell, Alloy HCL, JSON
-**Status:** Alpha — agent stubs ready, awaiting Phase 4 implementation
+**Status:** Alpha — all 7 agent instructions implemented; Phase 4 parallel test complete
 
 **GitHub:** https://github.com/7ports/project-helldiver
 
@@ -94,6 +94,31 @@ The scrum-master launches specialist agents inside Docker containers automatical
 **Prerequisites:**
 - Docker must be installed and running
 - `Dockerfile.voltron` must exist in the project root
+
+---
+
+## Active Work
+
+**Current goal:** Phase 4 complete — all 7 agent instructions implemented and tested
+
+**Recently completed:**
+- [x] Repository scaffolded
+- [x] Voltron infrastructure inherited (Dockerfile, scripts, settings.json)
+- [x] 7 agent stub files created
+- [x] Phase 4: All 7 Helldiver agent instructions implemented
+- [x] Phase 4: Parallel squadron test — project-hammer + project-alexandria onboarded simultaneously
+  - Alpha: Blackbox probing for CloudFront SPA + Fly.io API (3s cold-start threshold)
+  - Beta: GitHub Pages proxy for stdio MCP server (no HTTP surface)
+  - 0 merge conflicts, 0 human interventions
+
+**Key learnings from test run:**
+- Fly.io `auto_stop_machines = true` requires elevated latency thresholds to avoid false-positive alerts
+- stdio transport projects (MCP servers) have no probeable HTTP surface — docs site probing is the correct pattern
+- Blackbox-only monitoring is correct for CDN/managed-infra deployments (no persistent host)
+
+**In progress:**
+- [ ] Expand agent instructions with additional platform-specific examples (Railway, Render, Vercel)
+- [ ] Add a validation mode that runs against a live Sauron instance to confirm scrape targets resolve
 
 ---
 
