@@ -99,7 +99,7 @@ You will discover more specific platforms in Step 3. Search Alexandria for each 
 Read the following files from the target repo using `mcp__github__get_file_contents`.
 Do NOT fail if a file is missing — record it as "not present" and continue.
 
-Read these files (up to 13 total):
+Read these files (up to 14 total):
 1. `README.md` — project description, technology stack hints
 2. `CLAUDE.md` — deployment targets, architecture decisions, known endpoints
 3. `package.json` — Node.js dependencies, scripts, framework detection
@@ -113,6 +113,7 @@ Read these files (up to 13 total):
 11. `infrastructure/terraform/main.tf` — alternate Terraform path
 12. `.github/workflows/deploy.yml` — CI/CD deployment target
 13. `.github/workflows/ci.yml` — CI pipeline details
+14. `mcp-server/package.json` or `mcp-server/index.js` — MCP server subdirectory (common pattern for dedicated MCP server directories)
 
 For each file found, extract the signals documented in Step 4 below.
 
@@ -127,6 +128,8 @@ mcp__github__search_code(repo="<OWNER>/<REPO>", query="OTEL_")
 mcp__github__search_code(repo="<OWNER>/<REPO>", query="pushgateway")
 mcp__github__search_code(repo="<OWNER>/<REPO>", query="prometheus")
 mcp__github__search_code(repo="<OWNER>/<REPO>", query="grafana")
+mcp__github__search_code(repo="<OWNER>/<REPO>", query="StdioServerTransport")
+mcp__github__search_code(repo="<OWNER>/<REPO>", query="McpServer")
 ```
 
 Record all findings in the `Existing Monitoring` section of fingerprint.md.
@@ -162,6 +165,15 @@ From the files read in Step 3, detect and record the following:
 - MySQL: `mysql`, `mysql2` packages
 - MongoDB: `mongoose`, `mongodb` packages
 - SQLite: `better-sqlite3`, `sqlite3` packages
+
+**MCP Server Detection:**
+- Check `package.json` (and `mcp-server/package.json` if present) for `@modelcontextprotocol/sdk` in dependencies
+- If found → this project is an MCP server
+  - Search for `StdioServerTransport` → transport: `stdio` (no HTTP port, no public URL)
+  - Search for `SSEServerTransport` or `StreamableHTTPServerTransport` → transport: `http`
+  - Search for `server.tool(` patterns to enumerate tool names — list all found
+  - **stdio MCP servers have NO publicly reachable HTTP endpoint** — Blackbox HTTP probing of the MCP service itself is NOT possible
+  - If the project has an associated GitHub Pages or static docs site, note it as a separate probeable surface
 
 **HTTP Endpoints:**
 - From `fly.toml`: derive `https://<app>.fly.dev` as the primary endpoint
@@ -217,6 +229,21 @@ Based on all gathered signals, select one or more strategies and document justif
 - Requires: the `/metrics` endpoint is publicly reachable (not behind auth or VPN)
 - Suitable for: projects with existing Prometheus client instrumentation
 
+**MCP Tool Call Metrics (Pushgateway) — include for stdio MCP servers.**
+- Applies to: projects where `@modelcontextprotocol/sdk` is a dependency AND transport is `stdio`
+- The MCP server itself cannot be probed externally — instrument it to PUSH metrics
+- Collects: tool call counts, error counts, latency per tool name; domain-specific metrics
+- Mechanism: `prom-client` npm library + timer-based push to Sauron Pushgateway every 30s
+- Push endpoint: `https://sauron.7ports.ca/metrics/gateway/metrics/job/<CLIENT_LABEL>`
+- Auth: `Authorization: Bearer ${PUSH_BEARER_TOKEN}` header
+- NOT suitable for: replacing Blackbox probing of any associated static/docs site (keep that too)
+
+**Static Site Only — use ONLY Blackbox HTTP probing when no server code exists.**
+- Applies to: GitHub Pages, Jekyll/Hugo sites, Vercel static exports — pure static HTML/CSS/JS
+- Signals: `_config.yml` (Jekyll), `hugo.toml`/`config.toml` (Hugo), `vercel.json` with no functions
+- Collect: HTTP uptime, response time, status code via Blackbox Exporter
+- Do NOT attempt Alloy agent deployment (no Docker, no persistent host)
+
 Record each selected strategy with written justification.
 
 ### Step 8 — Write fingerprint.md
@@ -253,6 +280,9 @@ Pipeline run: helldiver/<CLIENT_LABEL>
 | Databases | e.g., PostgreSQL (Supabase), Redis (Upstash), none detected |
 | Docker Compose | present / not present |
 | Host-based | yes / no |
+| MCP server | yes / no |
+| MCP transport | stdio / http-sse / http-streamable / n/a |
+| MCP tools | list of tool names from server.tool() calls, or "none detected" |
 
 ## HTTP Endpoints
 

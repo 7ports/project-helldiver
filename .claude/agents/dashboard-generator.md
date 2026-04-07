@@ -323,6 +323,90 @@ If the instrumentation plan includes Alloy (host-based deployment), add:
 }
 ```
 
+### Step 5b — Add MCP Server Panels (if MCP server with Pushgateway)
+
+If the instrumentation plan specifies MCP tool call metrics (Pushgateway strategy), add these panels. Position them after any host metric panels (or after Row 2 if no host metrics).
+
+**Panel: Tool Call Rate (timeseries)**
+```json
+{
+  "type": "timeseries",
+  "title": "Tool Call Rate",
+  "datasource": {"type": "prometheus", "uid": "prometheus"},
+  "targets": [{
+    "expr": "sum by (tool) (rate(mcp_tool_calls_total{client=\"<CLIENT_LABEL>\"}[5m]))",
+    "legendFormat": "{{ tool }}",
+    "refId": "A"
+  }],
+  "fieldConfig": {
+    "defaults": {
+      "unit": "ops",
+      "custom": {"lineWidth": 2, "fillOpacity": 10}
+    }
+  },
+  "gridPos": {"h": 8, "w": 12, "x": 0, "y": "<next_y>"}
+}
+```
+
+**Panel: Tool Error Rate (timeseries)**
+```json
+{
+  "type": "timeseries",
+  "title": "Tool Error Rate",
+  "datasource": {"type": "prometheus", "uid": "prometheus"},
+  "targets": [{
+    "expr": "sum by (tool) (rate(mcp_tool_errors_total{client=\"<CLIENT_LABEL>\"}[5m]))",
+    "legendFormat": "{{ tool }}",
+    "refId": "A"
+  }],
+  "fieldConfig": {
+    "defaults": {
+      "unit": "ops",
+      "color": {"fixedColor": "red", "mode": "fixed"},
+      "custom": {"lineWidth": 2, "fillOpacity": 10}
+    }
+  },
+  "gridPos": {"h": 8, "w": 12, "x": 12, "y": "<next_y>"}
+}
+```
+
+**Panel: Tool Duration (timeseries)**
+```json
+{
+  "type": "timeseries",
+  "title": "Tool Duration",
+  "datasource": {"type": "prometheus", "uid": "prometheus"},
+  "targets": [{
+    "expr": "mcp_tool_duration_seconds{client=\"<CLIENT_LABEL>\"}",
+    "legendFormat": "{{ tool }}",
+    "refId": "A"
+  }],
+  "fieldConfig": {
+    "defaults": {
+      "unit": "s",
+      "custom": {"lineWidth": 2, "fillOpacity": 5}
+    }
+  },
+  "gridPos": {"h": 8, "w": 24, "x": 0, "y": "<next_y + 8>"}
+}
+```
+
+If the fingerprint identifies domain-specific metrics (e.g., `alexandria_guide_reads_total`), add a panel for those after Tool Duration:
+```json
+{
+  "type": "timeseries",
+  "title": "<Domain Resource> Reads",
+  "datasource": {"type": "prometheus", "uid": "prometheus"},
+  "targets": [{
+    "expr": "rate(<client>_resource_reads_total{client=\"<CLIENT_LABEL>\"}[5m])",
+    "legendFormat": "{{ resource }}",
+    "refId": "A"
+  }],
+  "fieldConfig": {"defaults": {"unit": "ops", "custom": {"lineWidth": 2, "fillOpacity": 10}}},
+  "gridPos": {"h": 8, "w": 24, "x": 0, "y": "<next_y>"}
+}
+```
+
 ### Step 6 — Assemble Complete Dashboard JSON
 
 Build the final dashboard JSON with these required top-level fields:
@@ -360,6 +444,31 @@ Rules:
 - All Loki panels: `"datasource": {"type": "loki", "uid": "loki"}`
 - Panel `id` values must be unique sequential integers starting at 1
 - `gridPos` must not overlap: verify x+w <= 24 for all panels in the same row
+
+### Step 6b — Always Add "About This Dashboard" Text Panel
+
+Every dashboard must end with a text panel explaining what is monitored and why. Generate this from fingerprint.md data.
+
+```json
+{
+  "gridPos": {"h": 5, "w": 24, "x": 0, "y": "<last_panel_y + last_panel_h>"},
+  "id": "<next_panel_id>",
+  "options": {
+    "content": "## About This Dashboard\n\n**<ProjectName>** — <one-sentence description from fingerprint README.md or CLAUDE.md>.\n\n| Component | Target | Method |\n|---|---|---|\n<one row per monitored endpoint or service>\n\n*Onboarded by Helldiver*",
+    "mode": "markdown"
+  },
+  "title": "About This Dashboard",
+  "type": "text"
+}
+```
+
+Rules for generating the content:
+- Extract project description from fingerprint's README.md summary (keep to 1 sentence)
+- One table row per monitored target: frontend URL, backend URL, MCP server, docs site, etc.
+- For Blackbox targets: Method = "Blackbox HTTP probe"
+- For MCP server: Method = "Pushgateway (tool call metrics)"
+- For Alloy: Method = "Alloy agent (host metrics + logs)"
+- Always ends with `*Onboarded by Helldiver*`
 
 ### Step 7 — Write Dashboard File
 
@@ -437,6 +546,8 @@ Next: validation-agent
 - [ ] `python3 -m json.tool` validation passes (exit code 0)
 - [ ] No placeholder text or example.com in any PromQL/LogQL expression
 - [ ] Status file written to working directory
+- [ ] "About This Dashboard" text panel present as final panel in every dashboard
+- [ ] MCP panels (Tool Call Rate, Tool Error Rate, Tool Duration) present if instrumentation plan specifies MCP server
 
 ---
 

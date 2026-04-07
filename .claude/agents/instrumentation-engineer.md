@@ -127,6 +127,118 @@ If any Lambda, GitHub Actions, or batch jobs are detected, document:
 - Authentication: Bearer token via `PUSH_BEARER_TOKEN` env var
 - Example curl command for pushing metrics
 
+### Step 5b — Plan MCP Server Instrumentation (stdio servers only)
+
+If `MCP server: yes` AND `MCP transport: stdio` in the fingerprint, plan Pushgateway-based instrumentation:
+
+**Why Pushgateway and not Blackbox:** stdio MCP servers have no HTTP port. They run as a subprocess of Claude Code on the user's machine — they cannot be scraped by Prometheus on Sauron. They must PUSH metrics outward.
+
+**Standard MCP metrics contract (use for ALL MCP server clients):**
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `mcp_tool_calls_total` | Counter | `tool`, `client`, `env`, `status` (success/error) | Total tool invocations |
+| `mcp_tool_errors_total` | Counter | `tool`, `client`, `env` | Tool invocations that threw an exception |
+| `mcp_tool_duration_seconds` | Gauge | `tool`, `client`, `env` | Duration of last tool call in seconds |
+
+**Domain-specific metrics (add based on what the MCP server manages):**
+- Knowledge base / documentation servers: `<client>_resource_reads_total{resource}`, `<client>_resource_updates_total{resource}`, `<client>_search_queries_total`, `<client>_resource_count` (gauge)
+- File management servers: `<client>_files_read_total`, `<client>_files_written_total`
+- API proxy servers: `<client>_upstream_calls_total{upstream}`, `<client>_upstream_errors_total{upstream}`
+
+**Push mechanism:**
+- Library: `prom-client` (npm) with a dedicated `Registry` instance (not the default registry)
+- Push target: `${SAURON_PUSHGATEWAY_URL}/metrics/job/${CLIENT_LABEL}` via HTTP POST
+  - `SAURON_PUSHGATEWAY_URL` = `https://sauron.7ports.ca/metrics/gateway`
+- Auth header: `Authorization: Bearer ${PUSH_BEARER_TOKEN}`
+- Content-Type: `text/plain` (Prometheus text format — what `registry.metrics()` returns)
+- Interval: `setInterval` every 30 seconds (fire-and-forget, never block tool calls)
+- On process exit: do a final push before shutdown
+
+**Required client-side environment variables:**
+```
+SAURON_PUSHGATEWAY_URL=https://sauron.7ports.ca/metrics/gateway
+PUSH_BEARER_TOKEN=<obtain from Rajesh — the same token used for Sauron Alloy agents>
+CLIENT_NAME=<CLIENT_LABEL>
+CLIENT_ENV=production
+```
+
+**Instrumentation code pattern for Node.js MCP servers:**
+```javascript
+// metrics.js
+import { Registry, Counter, Gauge } from 'prom-client';
+
+export const registry = new Registry();
+registry.setDefaultLabels({ client: process.env.CLIENT_NAME || 'unknown', env: process.env.CLIENT_ENV || 'production' });
+
+export const toolCallsTotal = new Counter({
+  name: 'mcp_tool_calls_total',
+  help: 'Total MCP tool invocations',
+  labelNames: ['tool', 'status'],
+  registers: [registry],
+});
+
+export const toolErrorsTotal = new Counter({
+  name: 'mcp_tool_errors_total',
+  help: 'MCP tool invocations that threw an exception',
+  labelNames: ['tool'],
+  registers: [registry],
+});
+
+export const toolDurationSeconds = new Gauge({
+  name: 'mcp_tool_duration_seconds',
+  help: 'Duration of last MCP tool call in seconds',
+  labelNames: ['tool'],
+  registers: [registry],
+});
+
+// Push to Sauron Pushgateway
+export async function pushMetrics() {
+  const url = process.env.SAURON_PUSHGATEWAY_URL;
+  const token = process.env.PUSH_BEARER_TOKEN;
+  if (!url || !token) return; // metrics disabled if env vars not set
+  try {
+    const metrics = await registry.metrics();
+    const client = process.env.CLIENT_NAME || 'unknown';
+    await fetch(`${url}/metrics/job/${client}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'text/plain' },
+      body: metrics,
+    });
+  } catch (e) {
+    // Fire-and-forget — never block tool calls
+    process.stderr.write(`[metrics] push failed: ${e.message}\n`);
+  }
+}
+
+// Timer: push every 30s
+setInterval(pushMetrics, 30_000);
+
+// Final push on exit
+process.on('exit', () => pushMetrics());
+```
+
+**Wrapping a tool handler:**
+```javascript
+// In tool handler wrapper
+async function withMetrics(toolName, fn) {
+  const start = Date.now();
+  try {
+    const result = await fn();
+    toolCallsTotal.inc({ tool: toolName, status: 'success' });
+    toolDurationSeconds.set({ tool: toolName }, (Date.now() - start) / 1000);
+    return result;
+  } catch (err) {
+    toolCallsTotal.inc({ tool: toolName, status: 'error' });
+    toolErrorsTotal.inc({ tool: toolName });
+    toolDurationSeconds.set({ tool: toolName }, (Date.now() - start) / 1000);
+    throw err;
+  }
+}
+```
+
+Document in the instrumentation plan: which domain-specific metrics apply to this project.
+
 ### Step 6 — Plan Direct Scrape Jobs (If /metrics Reachable)
 
 If the fingerprint indicates an existing `/metrics` endpoint is publicly reachable:
@@ -180,6 +292,12 @@ If Alloy present, also include:
 - Memory Usage: `1 - (node_memory_MemAvailable_bytes{client="<CLIENT_LABEL>"} / node_memory_MemTotal_bytes{client="<CLIENT_LABEL>"})`
 - Disk Usage: `1 - (node_filesystem_avail_bytes{client="<CLIENT_LABEL>",mountpoint="/"} / node_filesystem_size_bytes{client="<CLIENT_LABEL>",mountpoint="/"})`
 - Container Logs (Loki): `{client="<CLIENT_LABEL>"}` — log panel type
+
+If MCP server present (Pushgateway strategy), also include:
+- Tool Call Rate: `sum by (tool) (rate(mcp_tool_calls_total{client="<CLIENT_LABEL>"}[5m]))` — timeseries, unit: ops/s
+- Tool Error Rate: `sum by (tool) (rate(mcp_tool_errors_total{client="<CLIENT_LABEL>"}[5m]))` — timeseries, unit: ops/s
+- Tool Duration: `mcp_tool_duration_seconds{client="<CLIENT_LABEL>"}` — timeseries, unit: s
+- If resource-oriented server: `rate(<client>_resource_reads_total{client="<CLIENT_LABEL>"}[5m])` — timeseries
 
 ### Step 10 — Write instrumentation-plan.md
 
