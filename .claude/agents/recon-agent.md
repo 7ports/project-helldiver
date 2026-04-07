@@ -246,7 +246,42 @@ Based on all gathered signals, select one or more strategies and document justif
 
 Record each selected strategy with written justification.
 
-### Step 8 — Write fingerprint.md
+### Step 8 — Confidence Assessment
+
+Before writing fingerprint.md, rate your confidence in the selected monitoring strategy:
+
+**HIGH confidence** — you can confirm ALL of these:
+- The deployment platform is one you explicitly recognize (Fly.io, Vercel, AWS EC2, GitHub Pages, Railway)
+- At least one of the following is true: a public HTTP endpoint was found, OR host-based Docker is confirmed, OR this is a recognized stdio MCP server
+- The monitoring strategy maps cleanly to an existing Helldiver pattern (Blackbox, Alloy, Pushgateway, or Direct Scrape)
+
+**MEDIUM confidence** — one or more of these apply:
+- The deployment platform is recognizable but the framework is unusual
+- HTTP endpoints exist but health check path is guessed, not confirmed
+- A secondary database or service was detected but no exporter is documented for it
+
+**LOW confidence** — one or more of these apply:
+- The deployment platform is not in your recognized list
+- No public HTTP endpoint was found AND no host-based Docker was detected AND it's not a known stdio MCP server type
+- The runtime or framework is not in your recognized list (Go, Rust, Elixir, C#, Java, PHP that isn't standard Laravel/Symfony, WASM)
+- The project has no Dockerfile, no package.json, no pyproject.toml, no go.mod — runtime is truly unknown
+- The project appears to be a library, SDK, or CLI tool with no runtime service component
+- Open Questions contains more than 2 items
+
+**If confidence is LOW:**
+1. Add a prominent `## ⚠️ LOW CONFIDENCE — RESEARCH REQUIRED` section to fingerprint.md BEFORE the Recommended Monitoring Strategy section
+2. List specifically what is unknown and why standard patterns don't apply
+3. List 3–5 targeted questions that research would answer (e.g. "Does this runtime expose a /metrics endpoint by default?", "Is there a Prometheus exporter for X?")
+4. Set `Monitoring strategy: RESEARCH_REQUIRED` in the Identity table
+5. The instrumentation-engineer MUST NOT proceed until the scrum-master has addressed these questions
+
+Record in fingerprint.md:
+```
+| Confidence | high / medium / low |
+| Research required | yes / no |
+```
+
+### Step 9 — Write fingerprint.md
 
 Write the output file to `/tmp/helldiver-workdir/<CLIENT_LABEL>/fingerprint.md`.
 Use the exact structure defined in the Output section below.
@@ -283,6 +318,8 @@ Pipeline run: helldiver/<CLIENT_LABEL>
 | MCP server | yes / no |
 | MCP transport | stdio / http-sse / http-streamable / n/a |
 | MCP tools | list of tool names from server.tool() calls, or "none detected" |
+| Confidence | high / medium / low |
+| Research required | yes / no |
 
 ## HTTP Endpoints
 
@@ -309,6 +346,22 @@ Pipeline run: helldiver/<CLIENT_LABEL>
 | Pushgateway usage | yes/no | <file:line if found> |
 | Grafana/Prometheus config | yes/no | <file:line if found> |
 
+## ⚠️ LOW CONFIDENCE — RESEARCH REQUIRED
+
+<!-- Include this section ONLY when confidence is LOW. Remove entirely for high/medium. -->
+
+**What is unknown:**
+- <Specific gap 1 — e.g., deployment platform not recognized>
+- <Specific gap 2 — e.g., no runtime manifest files found>
+
+**Why standard patterns don't apply:**
+<Explanation of why Blackbox/Alloy/Pushgateway don't cleanly fit>
+
+**Research questions:**
+1. <e.g., Does this runtime expose a /metrics endpoint by default?>
+2. <e.g., Is there a Prometheus exporter for X?>
+3. <e.g., How does this platform handle persistent processes vs. ephemeral?>
+
 ## Recommended Monitoring Strategy
 
 ### Primary: Blackbox HTTP Probing
@@ -318,7 +371,7 @@ Endpoints to probe:
 - <URL 1> — expected 200
 - <URL 2> — expected 200
 
-### Secondary: <Alloy Agent / Pushgateway / Direct Scrape / None>
+### Secondary: <Alloy Agent / Pushgateway / Direct Scrape / None / RESEARCH_REQUIRED>
 Justification: <based on deployment platform and detected signals>
 
 ## Labels
@@ -344,8 +397,10 @@ Fingerprint: /tmp/helldiver-workdir/<CLIENT_LABEL>/fingerprint.md
 Deployment target: <target>
 Host-based: <yes/no>
 HTTP endpoints found: <N>
-Monitoring strategy: <Blackbox + Alloy / Blackbox only / Pushgateway / etc.>
+Monitoring strategy: <Blackbox + Alloy / Blackbox only / Pushgateway / RESEARCH_REQUIRED / etc.>
 Already onboarded: <yes/no>
+Confidence: <high / medium / low>
+Research required: <yes / no>
 Open questions: <N> — <list briefly>
 Next step: invoke instrumentation-engineer with CLIENT_LABEL=<CLIENT_LABEL>
 ```
@@ -360,6 +415,8 @@ Next step: invoke instrumentation-engineer with CLIENT_LABEL=<CLIENT_LABEL>
 - [ ] Idempotency check completed and `Already onboarded` field accurately set
 - [ ] At least one HTTP endpoint identified (or Open Questions documents why none found)
 - [ ] Monitoring strategy selected with written justification for each strategy chosen
+- [ ] Confidence level assessed and recorded (`Confidence` and `Research required` fields set)
+- [ ] LOW confidence → `⚠️ LOW CONFIDENCE — RESEARCH REQUIRED` section written with 3–5 research questions
 - [ ] Alexandria consulted for the detected deployment platform (documented)
 - [ ] No credentials, tokens, API keys, or secrets written to fingerprint.md
 - [ ] `Open Questions` section present even if empty (write "None" if no questions)

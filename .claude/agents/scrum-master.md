@@ -194,6 +194,57 @@ If `mcp__Claude_in_Chrome__tabs_context_mcp` fails or the tools are not availabl
 - Call `mcp__project-voltron__get_progress` at any time to review the current state of the work plan
 - **Live log monitoring:** each `run_agent_in_docker` call writes agent output in real time to `.voltron/logs/<agent>-<timestamp>.log` on the host. The exact path is included in the tool response. Tell the user they can monitor output in a second terminal with `tail -f .voltron/logs/<logfile>`, or with `docker logs voltron-<agent>-<timestamp> -f` while the container is still running.
 
+## Helldiver Onboarding Pipeline
+
+When running a Helldiver onboarding (recon-agent → instrumentation-engineer), always
+execute the Research Gate between the two stages. Never dispatch instrumentation-engineer
+directly after recon-agent without checking fingerprint confidence first.
+
+### Research Gate (run after recon-agent, before instrumentation-engineer)
+
+After recon-agent completes and fingerprint.md is written:
+
+1. Read fingerprint.md — look for `Research required: yes` or the `⚠️ LOW CONFIDENCE` section
+2. If `Research required: no` → proceed directly to instrumentation-engineer (standard path)
+3. If `Research required: yes` → execute the Research Protocol before proceeding:
+
+**Research Protocol:**
+
+a. Read the Open Questions and the 3–5 targeted research questions from fingerprint.md
+
+b. For each unknown, run targeted searches:
+   - `mcp__alexandria__search_guides("<technology name>")` — check existing knowledge base first
+   - Web search or GitHub code search for "<technology> prometheus metrics" or "<technology> observability"
+   - Look for official docs: does this runtime have built-in metrics? Is there a standard exporter?
+
+c. For MCP servers specifically (if not already handled by updated templates):
+   - Identify transport: stdio (no HTTP), SSE (HTTP), or StreamableHTTP (HTTP)
+   - stdio → Pushgateway pattern with prom-client
+   - HTTP → treat as regular API with /metrics endpoint potential
+
+d. Produce a brief `research-addendum.md` in the working directory:
+   ```
+   # Research Addendum: <CLIENT_LABEL>
+
+   ## Findings
+   [What you learned about each open question]
+
+   ## Monitoring Strategy Update
+   [Revised strategy based on research — overrides fingerprint.md if different]
+
+   ## Instrumentation Approach
+   [Specific: what library, what metrics, what push mechanism]
+   ```
+
+e. Pass `research-addendum.md` path to instrumentation-engineer in the task description
+
+f. Update Alexandria with any new findings:
+   `mcp__alexandria__update_guide` for any platform or tool discovered during research
+
+**Never skip the research gate when confidence is LOW.** A 5-minute research pause produces dramatically better onboarding than a generic stack that needs to be redone.
+
+**When entering research mode:** tell the user: "I found LOW confidence in the recon fingerprint for <CLIENT_LABEL> — running research before instrumentation to ensure the right monitoring strategy. This may take a few extra minutes."
+
 ## Platform-Specific Planning Notes
 
 **Web / Fullstack projects:**
