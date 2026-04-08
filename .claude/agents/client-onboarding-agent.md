@@ -113,7 +113,7 @@ Apply all guidance found before generating files.
 ### Step 3 — Determine Onboarding Path
 
 **Path A: Host-Based (Alloy required)**
-Condition: fingerprint shows `Host-based: yes` AND Docker Compose is present.
+Condition: fingerprint shows `Host-based: yes` AND Docker Compose is present AND NOT an MCP stdio server.
 Generate 4 files: `config.alloy`, `docker-compose.monitoring.yml`,
 `.env.monitoring.example`, `ONBOARDING.md`.
 
@@ -121,6 +121,11 @@ Generate 4 files: `config.alloy`, `docker-compose.monitoring.yml`,
 Condition: fingerprint shows `Host-based: no` OR deployment is Vercel/Lambda/pure CDN.
 Generate 2 files: `.env.monitoring.example`, `ONBOARDING.md`.
 Monitoring is hub-side only via Blackbox — document this clearly.
+
+**Path C: MCP stdio server (Pushgateway + prom-client)**
+Condition: fingerprint `project_type` is `"mcp_stdio"` OR fingerprint shows `StdioServerTransport` import.
+MCP servers have NO HTTP port — Prometheus cannot scrape them. They must PUSH to Sauron's Pushgateway.
+Follow Step 4c below instead of 4a/4b. Generate: `.env.monitoring`, `ONBOARDING.md`.
 
 ### Step 4a — Generate config.alloy (Path A only)
 
@@ -280,6 +285,171 @@ For questions or to modify monitoring configuration, contact Rajesh or open an i
 at https://github.com/7ports/project-sauron.
 ```
 
+### Step 4c — MCP stdio Server Setup (Path C only)
+
+MCP stdio servers have NO HTTP port. Skip Steps 4a and 4b entirely. Follow this path instead.
+
+**Sub-step C1: Install prom-client**
+
+The metrics module requires `prom-client`. npm may NOT be available (e.g., NVM for Windows — `node.exe` exists but `npm` does not work in bash). Use this detection + install flow:
+
+```bash
+if [ -d "mcp-server/node_modules/prom-client" ]; then
+  echo "prom-client already installed"
+else
+  if command -v npm &>/dev/null; then
+    cd mcp-server && npm install prom-client && cd ..
+  else
+    # npm not available — install via Node.js tarball download from registry
+    node << 'INSTALL_SCRIPT'
+const https = require('https');
+const zlib = require('zlib');
+const fs = require('fs');
+const path = require('path');
+
+function fetchJson(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'node' } }, (res) => {
+      let data = '';
+      res.on('data', d => data += d);
+      res.on('end', () => resolve(JSON.parse(data)));
+      res.on('error', reject);
+    });
+  });
+}
+
+function downloadBuffer(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'node' } }, (res) => {
+      const chunks = [];
+      res.on('data', d => chunks.push(d));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+      res.on('error', reject);
+    });
+  });
+}
+
+function extractTarball(buf, destDir) {
+  const gunzipped = zlib.gunzipSync(buf);
+  let offset = 0;
+  while (offset < gunzipped.length - 512) {
+    const name = gunzipped.slice(offset, offset + 100).toString('utf8').replace(/\0/g, '');
+    if (!name) break;
+    const sizeStr = gunzipped.slice(offset + 124, offset + 136).toString('utf8').replace(/\0/g, '').trim();
+    const size = parseInt(sizeStr, 8) || 0;
+    const dataStart = offset + 512;
+    if (gunzipped[offset + 156] !== 53) {
+      const outPath = path.join(destDir, name.replace(/^package\//, ''));
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      fs.writeFileSync(outPath, gunzipped.slice(dataStart, dataStart + size));
+    }
+    offset = dataStart + Math.ceil(size / 512) * 512;
+  }
+}
+
+async function installPkg(name, nodeModules) {
+  console.log('Installing', name);
+  const meta = await fetchJson('https://registry.npmjs.org/' + name + '/latest');
+  const buf = await downloadBuffer(meta.dist.tarball);
+  extractTarball(buf, path.join(nodeModules, name));
+  console.log('Done:', name, meta.version);
+}
+
+(async () => {
+  const nm = path.join(process.cwd(), 'mcp-server', 'node_modules');
+  for (const pkg of ['prom-client', 'tdigest', '@opentelemetry/api', 'bintrees']) {
+    await installPkg(pkg, nm);
+  }
+})().catch(e => { console.error(e); process.exit(1); });
+INSTALL_SCRIPT
+  fi
+fi
+
+# Verify installation
+node --input-type=module -e "import { Registry } from 'prom-client'; console.log('prom-client OK');" \
+  || { echo "ERROR: prom-client import failed after install"; exit 1; }
+```
+
+**Sub-step C2: Configure env vars in ~/.claude.json**
+
+The MCP server process runs as a Claude Code MCP extension. Its env vars come from `~/.claude.json`, NOT from shell environment. If these are missing, the push timer starts but silently does nothing.
+
+Detect the server entry:
+```bash
+node -e "
+const fs = require('fs');
+const cfg = JSON.parse(fs.readFileSync(require('os').homedir() + '/.claude.json', 'utf8'));
+const servers = cfg.mcpServers || {};
+Object.keys(servers).forEach(k => { console.log(k, JSON.stringify(Object.keys(servers[k].env || {}))); });
+"
+```
+
+If the server entry exists but `env` is missing or empty (e.g., `{}`), update `~/.claude.json` using the Edit tool to add:
+
+```json
+"SAURON_PUSHGATEWAY_URL": "https://<SAURON_DOMAIN>/metrics/gateway",
+"PUSH_BEARER_TOKEN": "<PUSH_BEARER_TOKEN>",
+"CLIENT_NAME": "<CLIENT_LABEL>",
+"CLIENT_ENV": "production"
+```
+
+Also write `.env.monitoring` in the project root with the same values.
+
+**Sub-step C3: Verify push endpoint**
+
+```bash
+curl -sf -X POST \
+  -H "Authorization: Bearer <PUSH_BEARER_TOKEN>" \
+  -H "Content-Type: text/plain" \
+  --data "# HELP onboarding_test Connectivity check
+# TYPE onboarding_test gauge
+onboarding_test 1
+" \
+  "https://<SAURON_DOMAIN>/metrics/gateway/metrics/job/<CLIENT_LABEL>/instance/onboarding-check"
+# Expected: HTTP 200 or 202
+# If 401: bearer token wrong — check PUSH_BEARER_TOKEN_SAURON in Sauron .env
+# If 000: domain wrong or Sauron is down
+```
+
+Clean up test metric after verifying:
+```bash
+curl -sf -X DELETE \
+  -H "Authorization: Bearer <PUSH_BEARER_TOKEN>" \
+  "https://<SAURON_DOMAIN>/metrics/gateway/metrics/job/<CLIENT_LABEL>/instance/onboarding-check"
+```
+
+**Sub-step C4: Warn about Claude Code restart**
+
+Write prominently in ONBOARDING.md:
+
+```
+⚠️  REQUIRED ACTION: Restart Claude Code
+   ~/.claude.json has been updated with Sauron push env vars.
+   These take effect ONLY after Claude Code is fully restarted.
+   Without restarting, NO metrics will flow even though config is correct.
+
+   After restarting, wait 60 seconds then verify:
+   curl https://<SAURON_DOMAIN>/metrics/gateway/metrics | grep '<CLIENT_LABEL>'
+```
+
+**Sub-step C5: Verify push timer is wired**
+
+Read the MCP server entry file. Confirm `startMetricsPush` is imported and called:
+```javascript
+import { startMetricsPush } from './monitoring/metrics.js';
+startMetricsPush({
+  url: process.env.SAURON_PUSHGATEWAY_URL,
+  token: process.env.PUSH_BEARER_TOKEN,
+  clientName: process.env.CLIENT_NAME || '<CLIENT_LABEL>',
+  clientEnv: process.env.CLIENT_ENV || 'production',
+  intervalMs: 30_000,
+});
+```
+
+If missing, add it. The function must silently skip (not crash) if `SAURON_PUSHGATEWAY_URL` is falsy.
+
+---
+
 ### Step 7 — Push Files to Target Repo
 
 Push each file to the target GitHub repository using `mcp__github__create_or_update_file`.
@@ -293,6 +463,11 @@ For Path A, push these 4 files:
 For Path B, push these 2 files:
 1. `.env.monitoring.example` → root of repo
 2. `ONBOARDING.md` → root of repo
+
+For Path C (MCP stdio), these files are written locally (not pushed via GitHub API — they modify the local machine):
+1. `~/.claude.json` — updated in-place (NOT pushed to GitHub — contains secrets)
+2. `.env.monitoring` — written to project root (NOT pushed — contains bearer token)
+3. `ONBOARDING.md` → push to repo root
 
 For each push, use commit message:
 ```

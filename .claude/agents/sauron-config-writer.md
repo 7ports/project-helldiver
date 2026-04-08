@@ -88,13 +88,81 @@ Apply any relevant guidance found before writing or editing.
 
 ### Step 3 — Validate Instrumentation Plan Completeness
 
-Before writing, verify the instrumentation-plan.md contains:
+Check `project_type` in `fingerprint.json` (or fingerprint.md).
+
+**For MCP stdio projects** (`project_type: "mcp_stdio"` or `StdioServerTransport` in codebase):
+- Skip Step 4 (Blackbox targets) — MCP servers have no HTTP URL to probe
+- Follow Step 4-MCP below instead
+- Alert rules in Step 5 must use `absent()` not `probe_success` — see Step 5-MCP
+
+**For all other projects**, verify instrumentation-plan.md contains:
 - At least one Blackbox probe URL
 - Alert rule specifications with PromQL expressions
 - The CLIENT_LABEL value
 - Labels: `client: <CLIENT_LABEL>`, `env: production`
 
 If any required information is missing, halt and report to scrum-master.
+
+### Step 4-MCP — Pushgateway Setup (MCP stdio projects only)
+
+Skip this step for non-MCP projects.
+
+**4-MCP-a: Verify pushgateway job in prometheus.yml**
+
+Read `prometheus.yml`. If no `pushgateway` job exists, add it using the Edit tool:
+
+```yaml
+  - job_name: 'pushgateway'
+    honor_labels: true
+    static_configs:
+      - targets: ['pushgateway:9091']
+```
+
+`honor_labels: true` is REQUIRED — without it, Prometheus overwrites the `client`, `instance`, and `job` labels the Pushgateway client sets, making all MCP metrics appear with the same label values regardless of which client pushed them.
+
+**4-MCP-b: Skip Step 4 and go to Step 5-MCP**
+
+---
+
+### Step 5-MCP — Write MCP Alert Rules (MCP stdio projects only)
+
+Skip this step for non-MCP projects. For non-MCP projects follow Step 5.
+
+Write `/workspace/monitoring/prometheus/rules/<CLIENT_LABEL>.yml`:
+
+```yaml
+groups:
+  - name: <CLIENT_LABEL>-mcp
+    rules:
+      - alert: <ClientLabel>MCPMetricsMissing
+        expr: absent(mcp_uptime_seconds{client="<CLIENT_LABEL>"})
+        for: 10m
+        labels:
+          severity: warning
+          client: <CLIENT_LABEL>
+        annotations:
+          summary: "<ClientLabel> MCP server metrics not received"
+          description: "No metrics from <CLIENT_LABEL> for >10 minutes. MCP server may be down or push timer stopped."
+
+      - alert: <ClientLabel>MCPHighErrorRate
+        expr: |
+          rate(mcp_errors_total{client="<CLIENT_LABEL>"}[5m])
+          /
+          rate(mcp_requests_total{client="<CLIENT_LABEL>"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          client: <CLIENT_LABEL>
+        annotations:
+          summary: "<ClientLabel> MCP error rate >10%"
+          description: "MCP error rate: {{ $value | humanizePercentage }}"
+```
+
+**Why `absent()` instead of `== 0`**: Pushgateway retains metrics only while the client actively pushes. When a MCP server stops, its metrics disappear entirely from Pushgateway. A `== 0` check would NEVER fire because there is no series to evaluate. `absent()` fires when the metric doesn't exist at all — which is the correct failure mode.
+
+After writing, skip Step 4 entirely and proceed to Step 6.
+
+---
 
 ### Step 4 — Surgically Edit prometheus.yml (Blackbox Targets)
 

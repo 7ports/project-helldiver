@@ -207,6 +207,74 @@ be deployed yet, or may be behind auth. Record the result in the report but cont
 If all URLs return DOWN, add a note: "Recommend verifying deployment before considering
 monitoring active."
 
+### Step 8b — MCP Client-Side Validation (MCP stdio projects only)
+
+Skip this step for non-MCP projects. Run AFTER Step 8 (or in place of Step 8 if no Blackbox URLs).
+
+These checks validate that the client machine is correctly configured to push metrics. They require access to the client project's local environment. Run on the client machine (not inside Docker).
+
+**MCP-Check 1: prom-client installed**
+```bash
+test -d "mcp-server/node_modules/prom-client" \
+  && echo "PASS: prom-client installed" \
+  || echo "FAIL: prom-client not installed — re-run client-onboarding-agent"
+```
+
+**MCP-Check 2: ~/.claude.json has all 4 env vars**
+
+Read `~/.claude.json`. Find the server entry for this project. Verify these keys exist and are non-empty in the `env` block:
+- `SAURON_PUSHGATEWAY_URL`
+- `PUSH_BEARER_TOKEN`
+- `CLIENT_NAME`
+- `CLIENT_ENV`
+
+```bash
+node -e "
+const fs = require('fs');
+const os = require('os');
+const cfg = JSON.parse(fs.readFileSync(os.homedir() + '/.claude.json', 'utf8'));
+const required = ['SAURON_PUSHGATEWAY_URL','PUSH_BEARER_TOKEN','CLIENT_NAME','CLIENT_ENV'];
+const servers = cfg.mcpServers || {};
+let found = false;
+for (const [k, v] of Object.entries(servers)) {
+  const env = v.env || {};
+  const missing = required.filter(r => !env[r]);
+  if (k.toLowerCase().includes('<CLIENT_LABEL>') || (env.CLIENT_NAME === '<CLIENT_LABEL>')) {
+    found = true;
+    if (missing.length) { console.log('FAIL: missing env vars:', missing.join(', ')); }
+    else { console.log('PASS: all 4 env vars present in server:', k); }
+  }
+}
+if (!found) console.log('WARN: no matching MCP server entry found for <CLIENT_LABEL> in ~/.claude.json');
+"
+```
+
+If any env var is missing: FAIL. This is the most common root cause of "No data" in Grafana for MCP projects.
+
+**MCP-Check 3: Push endpoint reachable**
+```bash
+curl -sf https://<SAURON_DOMAIN>/metrics/gateway/metrics -o /dev/null -w "%{http_code}" \
+  && echo " PASS" || echo " FAIL: pushgateway unreachable"
+```
+
+**MCP-Check 4: Metrics flowing (requires Claude Code restart first)**
+
+If user has confirmed Claude Code restart: wait 60 seconds then query:
+```bash
+curl -s "http://localhost:9090/api/v1/query?query=mcp_uptime_seconds%7Bclient%3D%22<CLIENT_LABEL>%22%7D" \
+  | grep -q '"result":\[{' \
+  && echo "PASS: mcp_uptime_seconds metrics flowing" \
+  || echo "ADVISORY: no metrics yet — may need to wait 30 more seconds or verify Claude Code was restarted"
+```
+
+If MCP-Check 4 fails: this is ADVISORY (not blocking). The user may not have restarted Claude Code yet. Include this note in the report:
+```
+ℹ️  MCP metrics do not flow until Claude Code is restarted after ~/.claude.json is updated.
+    If you have not restarted Claude Code since client-onboarding-agent ran, do so now and re-run validation.
+```
+
+---
+
 ### Step 9 — Check 6: Placeholder Scan (REQUIRED)
 
 ```bash
