@@ -1,0 +1,122 @@
+name: E2E Integration Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "Test scope"
+        required: false
+        default: "all"
+        type: choice
+        options: [all, health, pipeline]
+  schedule:
+    - cron: "0 6 * * 1"  # Every Monday 6 AM UTC
+
+concurrency:
+  group: e2e-test
+  cancel-in-progress: false  # Never cancel mid-cleanup to avoid orphaned test artifacts
+
+jobs:
+  sauron-health:
+    name: Sauron Stack Health
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Sauron health checks
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -euo pipefail
+
+            result=$(bash /opt/project-sauron/scripts/verify-stack.sh --json)
+            echo "$result"
+
+            overall=$(echo "$result" | grep -o '"overall": "[^"]*"' | cut -d'"' -f4)
+            if [[ "$overall" != "PASS" ]]; then
+              echo "HEALTH CHECK FAILED: verify-stack.sh returned overall=$overall"
+              exit 1
+            fi
+            echo "All stack health checks PASSED"
+
+  helldiver-pipeline:
+    name: Helldiver Pipeline (${{ matrix.repo }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false  # Run all matrix entries even if one fails — independent projects
+      matrix:
+        include:
+          - owner: 7ports
+            repo: project-hammer
+            label: test-hammer
+          # To onboard a new project into E2E testing: add a row here.
+          # No script changes are needed — e2e-test.sh is fully parameterized.
+          # Example:
+          # - owner: 7ports
+          #   repo: project-alexandria
+          #   label: test-alexandria
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: project-helldiver
+
+      # Check out project-sauron so the pipeline validation checks can inspect
+      # the rules, dashboards, and prometheus.yml that agents write into it.
+      - uses: actions/checkout@v4
+        with:
+          repository: 7ports/project-sauron
+          path: project-sauron
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run E2E pipeline test
+        working-directory: project-helldiver
+        env:
+          SAURON_URL: ${{ secrets.SAURON_URL }}
+          PUSH_BEARER_TOKEN: ${{ secrets.PUSH_BEARER_TOKEN }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_SSH_KEY_PATH: /tmp/ec2-key
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          SAURON_REPO: ${{ github.workspace }}/project-sauron
+        run: |
+          # Write SSH key to file with restricted permissions
+          echo "${{ secrets.EC2_SSH_KEY }}" > /tmp/ec2-key
+          chmod 600 /tmp/ec2-key
+
+          bash scripts/e2e-test.sh \
+            --owner "${{ matrix.owner }}" \
+            --repo "${{ matrix.repo }}" \
+            --label "${{ matrix.label }}" \
+            --scope "${{ inputs.scope || 'all' }}" \
+            --dry-run \
+            --sauron-repo "$SAURON_REPO"
+
+      # Explicit cleanup step runs only on failure — the script's EXIT trap
+      # handles cleanup on success. This ensures orphaned metrics and files
+      # are always removed even if the script crashes before its own cleanup.
+      - name: Cleanup on failure
+        if: failure()
+        working-directory: project-helldiver
+        env:
+          SAURON_URL: ${{ secrets.SAURON_URL }}
+          PUSH_BEARER_TOKEN: ${{ secrets.PUSH_BEARER_TOKEN }}
+          SAURON_REPO: ${{ github.workspace }}/project-sauron
+        run: |
+          bash scripts/cleanup-e2e.sh "${{ matrix.label }}" --sauron-repo "$SAURON_REPO"
+
+      # Upload workdir artifacts for post-run inspection regardless of outcome
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results-${{ matrix.repo }}-${{ github.run_id }}
+          path: /tmp/helldiver-workdir/
+          retention-days: 7
+          if-no-files-found: ignore
