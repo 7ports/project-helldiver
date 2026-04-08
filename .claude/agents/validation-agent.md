@@ -314,6 +314,8 @@ Advisory checks (HTTP reachability) do not affect PASS/FAIL status.
 
 ### Step 12 — If PASS: Stage and Commit
 
+**Dry-run mode**: If the task prompt contains `DRY_RUN=true`, skip all `git add`, `git commit`, and `git push` steps in this section. Write `"dry-run — commit skipped"` as the commit SHA in validation-report.md. All validation checks (Steps 1–11) still execute normally. This mode is used by the E2E test harness to validate pipeline outputs without modifying the production Sauron repo.
+
 Stage only the Sauron hub-side files (not the working directory artifacts):
 
 ```bash

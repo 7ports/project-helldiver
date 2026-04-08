@@ -279,6 +279,8 @@ If no monitored projects table exists, add a new section near the bottom:
 
 ### Step 7 — Commit and Push Docs Changes
 
+**Dry-run mode**: If the task prompt contains `DRY_RUN=true`, skip all `git add`, `git commit`, `git push`, and `mcp__github__create_or_update_file` steps in this section. Write the generated documentation files to the working directory only (`/tmp/helldiver-workdir/<CLIENT_LABEL>/docs/`). Write `"dry-run — commit skipped"` as the docs commit SHA in the handoff report. Step 8 (Voltron reflection) still runs normally. This mode is used by the E2E test harness to validate pipeline outputs without publishing to GitHub Pages.
+
 Stage and commit only the documentation files:
 
 ```bash
