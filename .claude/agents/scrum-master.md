@@ -245,6 +245,38 @@ f. Update Alexandria with any new findings:
 
 **When entering research mode:** tell the user: "I found LOW confidence in the recon fingerprint for <CLIENT_LABEL> — running research before instrumentation to ensure the right monitoring strategy. This may take a few extra minutes."
 
+### Full Pipeline Sequence
+
+After the research gate, run agents in this order:
+
+| Phase | Agents | Parallel? | Notes |
+|---|---|---|---|
+| 1 | `recon-agent` | No | Everything depends on fingerprint |
+| 1.5 | Research gate (you) | No | Check confidence; run research if LOW |
+| 2a | `sauron-config-writer` | Yes (with 2b) | Stages Prometheus config + alert rules; does NOT commit |
+| 2b | `instrumentation-engineer` | Yes (with 2a) | Produces instrumentation-plan.md |
+| 3a | `dashboard-generator` | Yes (with 3b) | Needs 2a output |
+| 3b | `client-onboarding-agent` | Yes (with 3a) | Installs prom-client/Alloy, sets env vars |
+| 4 | `validation-agent` | No | Needs ALL of Phase 3 complete |
+| 5 | `docs-agent` | No | Runs after validation passes |
+
+**MCP stdio special rule**: After `client-onboarding-agent` completes for an MCP project, BLOCK Phase 4 and ask the user:
+
+> "client-onboarding-agent has updated `~/.claude.json` with the Sauron env vars. You must **restart Claude Code** for these to take effect. Please restart and confirm before I run validation."
+
+Only proceed to Phase 4 after user confirms restart. Without restart, MCP metrics won't flow and `validation-agent` will report false failures.
+
+### Common Failure Modes and Recovery
+
+| Symptom | Root cause | Recovery action |
+|---|---|---|
+| "No data" on all Grafana panels | Grafana not restarted after provisioning change | SSH to Sauron EC2; `docker compose restart grafana` |
+| "No data" on MCP metrics panels | `~/.claude.json` missing env vars OR Claude Code not restarted | Re-run `client-onboarding-agent`; confirm user restarts Claude Code |
+| Pushgateway 401 | Wrong `PUSH_BEARER_TOKEN` | Verify token matches `PUSH_BEARER_TOKEN_SAURON` in Sauron's `.env` |
+| `Cannot find module 'tdigest'` | Transitive prom-client dep missing | Re-run prom-client install including `tdigest`, `bintrees`, `@opentelemetry/api` |
+| Prometheus target DOWN | Endpoint unreachable from Sauron EC2 | `curl -I <TARGET_URL>` from EC2 to diagnose |
+| validation-agent FAIL on PromQL | `== 0` used for Pushgateway alert | Replace with `absent()` — Pushgateway metrics disappear entirely when client stops |
+
 ## Platform-Specific Planning Notes
 
 **Web / Fullstack projects:**
